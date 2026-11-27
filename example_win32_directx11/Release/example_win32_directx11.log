@@ -1,0 +1,9 @@
+﻿  main.cpp
+C:\Users\nettspend\Desktop\imgui\imgui-1.93.1\examples\example_win32_directx11\main.cpp(96,10): warning C4189: 'show_demo_window': local variable is initialized but not referenced
+C:\Users\nettspend\Desktop\imgui\imgui-1.93.1\examples\example_win32_directx11\main.cpp(97,10): warning C4189: 'show_another_window': local variable is initialized but not referenced
+  Generating code
+  2 of 1895 functions ( 0.1%) were compiled, the rest were copied from previous compilation.
+    0 functions were new in current compilation
+    57 functions had inline decision re-evaluated but remain unchanged
+  Finished generating code
+  example_win32_directx11.vcxproj -> C:\Users\nettspend\Desktop\imgui\imgui-1.93.1\examples\example_win32_directx11\Release\example_win32_directx11.exe
