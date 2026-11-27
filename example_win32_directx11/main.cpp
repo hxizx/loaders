@@ -1,24 +1,25 @@
-// Dear ImGui: standalone example application for Windows API + DirectX 11
-
-// Learn about Dear ImGui:
-// - FAQ                  https://dearimgui.com/faq
-// - Getting Started      https://dearimgui.com/getting-started
-// - Documentation        https://dearimgui.com/docs (same as your local docs/ folder).
-// - Introduction, links and more at the top of imgui.cpp
+// Absent Loader — Win32 + DirectX 11 + Dear ImGui
+// Licensed via KeyAuth (C++ client matching the C# api init credentials).
 
 #include "imgui.h"
 #include "imgui_impl_win32.h"
 #include "imgui_impl_dx11.h"
+#include "keyauth/auth.hpp"
+
 #include <d3d11.h>
 #include <tchar.h>
+#include <windows.h>
+#include <string>
+#include <cstring>
+#include <exception>
 
 // Data
-static ID3D11Device* g_pd3dDevice = nullptr;
-static ID3D11DeviceContext* g_pd3dDeviceContext = nullptr;
-static IDXGISwapChain* g_pSwapChain = nullptr;
+static ID3D11Device*            g_pd3dDevice = nullptr;
+static ID3D11DeviceContext*     g_pd3dDeviceContext = nullptr;
+static IDXGISwapChain*          g_pSwapChain = nullptr;
 static bool                     g_SwapChainOccluded = false;
 static UINT                     g_ResizeWidth = 0, g_ResizeHeight = 0;
-static ID3D11RenderTargetView* g_mainRenderTargetView = nullptr;
+static ID3D11RenderTargetView*  g_mainRenderTargetView = nullptr;
 
 // Forward declarations of helper functions
 bool CreateDeviceD3D(HWND hWnd);
@@ -26,20 +27,279 @@ void CleanupDeviceD3D();
 void CreateRenderTarget();
 void CleanupRenderTarget();
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+static void ApplyAbsentStyle();
+static void DrawLoginWindow();
+static void DrawDashboardWindow();
+
+// ---------------------------------------------------------------------------
+// KeyAuth — C++ equivalent of the C# dashboard snippet:
+//
+//   public static api KeyAuthApp = new api(
+//       name: "evolution",
+//       ownerid: "UISzwEIYml",
+//       version: "1.0"
+//       //path: @"Your_Path_Here"
+//   );
+// ---------------------------------------------------------------------------
+static KeyAuth::api KeyAuthApp(
+    "evolution",
+    "UISzwEIYml",
+    "1.0"
+    // , "Your_Path_Here"
+);
+
+static bool g_keyauth_ready = false;
+static bool g_licensed = false;
+static char g_license_key[128] = "";
+static std::string g_status_message = "Connecting to license server...";
+static bool g_status_error = false;
+static bool g_login_busy = false;
+
+static void ApplyAbsentStyle()
+{
+    ImGuiStyle& style = ImGui::GetStyle();
+    ImGui::StyleColorsDark();
+
+    // Spacing / shape — keep rounded product look, tighten consistency
+    style.WindowRounding = 12.0f;
+    style.ChildRounding = 8.0f;
+    style.FrameRounding = 8.0f;
+    style.PopupRounding = 8.0f;
+    style.ScrollbarRounding = 8.0f;
+    style.GrabRounding = 8.0f;
+    style.TabRounding = 8.0f;
+
+    style.WindowPadding = ImVec2(20.0f, 18.0f);
+    style.FramePadding = ImVec2(12.0f, 8.0f);
+    style.ItemSpacing = ImVec2(10.0f, 10.0f);
+    style.ItemInnerSpacing = ImVec2(8.0f, 6.0f);
+    style.IndentSpacing = 16.0f;
+    style.ScrollbarSize = 12.0f;
+    style.GrabMinSize = 10.0f;
+
+    style.WindowBorderSize = 1.0f;
+    style.FrameBorderSize = 0.0f;
+    style.PopupBorderSize = 1.0f;
+
+    // Absent Loader palette — deep charcoal + violet accent (existing brand)
+    ImVec4* colors = style.Colors;
+    const ImVec4 bg         = ImVec4(0.07f, 0.07f, 0.09f, 1.00f);
+    const ImVec4 bg_soft    = ImVec4(0.10f, 0.10f, 0.13f, 1.00f);
+    const ImVec4 frame      = ImVec4(0.14f, 0.14f, 0.18f, 1.00f);
+    const ImVec4 frame_hov  = ImVec4(0.18f, 0.16f, 0.24f, 1.00f);
+    const ImVec4 accent     = ImVec4(0.65f, 0.28f, 0.98f, 1.00f);
+    const ImVec4 accent_hov = ImVec4(0.72f, 0.40f, 1.00f, 1.00f);
+    const ImVec4 accent_act = ImVec4(0.50f, 0.18f, 0.80f, 1.00f);
+    const ImVec4 text       = ImVec4(0.94f, 0.94f, 0.97f, 1.00f);
+    const ImVec4 text_dim   = ImVec4(0.55f, 0.55f, 0.62f, 1.00f);
+    const ImVec4 border     = ImVec4(0.22f, 0.20f, 0.30f, 1.00f);
+
+    colors[ImGuiCol_Text]                 = text;
+    colors[ImGuiCol_TextDisabled]         = text_dim;
+    colors[ImGuiCol_WindowBg]             = bg;
+    colors[ImGuiCol_ChildBg]              = bg_soft;
+    colors[ImGuiCol_PopupBg]              = bg_soft;
+    colors[ImGuiCol_Border]               = border;
+    colors[ImGuiCol_BorderShadow]         = ImVec4(0, 0, 0, 0);
+    colors[ImGuiCol_FrameBg]              = frame;
+    colors[ImGuiCol_FrameBgHovered]       = frame_hov;
+    colors[ImGuiCol_FrameBgActive]        = ImVec4(0.22f, 0.18f, 0.30f, 1.00f);
+    colors[ImGuiCol_TitleBg]              = bg;
+    colors[ImGuiCol_TitleBgActive]        = bg_soft;
+    colors[ImGuiCol_TitleBgCollapsed]     = bg;
+    colors[ImGuiCol_MenuBarBg]            = bg_soft;
+    colors[ImGuiCol_ScrollbarBg]          = bg;
+    colors[ImGuiCol_ScrollbarGrab]        = ImVec4(0.28f, 0.26f, 0.36f, 1.00f);
+    colors[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.36f, 0.32f, 0.48f, 1.00f);
+    colors[ImGuiCol_ScrollbarGrabActive]  = accent;
+    colors[ImGuiCol_CheckMark]            = accent;
+    colors[ImGuiCol_SliderGrab]           = accent;
+    colors[ImGuiCol_SliderGrabActive]     = accent_act;
+    colors[ImGuiCol_Button]               = accent;
+    colors[ImGuiCol_ButtonHovered]        = accent_hov;
+    colors[ImGuiCol_ButtonActive]         = accent_act;
+    colors[ImGuiCol_Header]               = ImVec4(0.28f, 0.18f, 0.42f, 0.70f);
+    colors[ImGuiCol_HeaderHovered]        = ImVec4(0.40f, 0.24f, 0.58f, 0.85f);
+    colors[ImGuiCol_HeaderActive]         = accent_act;
+    colors[ImGuiCol_Separator]            = border;
+    colors[ImGuiCol_SeparatorHovered]     = accent_hov;
+    colors[ImGuiCol_SeparatorActive]      = accent;
+    colors[ImGuiCol_ResizeGrip]           = ImVec4(accent.x, accent.y, accent.z, 0.25f);
+    colors[ImGuiCol_ResizeGripHovered]    = ImVec4(accent.x, accent.y, accent.z, 0.55f);
+    colors[ImGuiCol_ResizeGripActive]     = accent;
+    colors[ImGuiCol_Tab]                  = bg_soft;
+    colors[ImGuiCol_TabHovered]           = accent_hov;
+    colors[ImGuiCol_TabActive]            = ImVec4(0.32f, 0.20f, 0.48f, 1.00f);
+    colors[ImGuiCol_PlotLines]            = accent;
+    colors[ImGuiCol_PlotHistogram]        = accent;
+    colors[ImGuiCol_TextSelectedBg]       = ImVec4(accent.x, accent.y, accent.z, 0.35f);
+    colors[ImGuiCol_NavHighlight]         = accent;
+}
+
+static void CenterText(const char* text)
+{
+    const float window_width = ImGui::GetWindowSize().x;
+    const float text_width = ImGui::CalcTextSize(text).x;
+    ImGui::SetCursorPosX((window_width - text_width) * 0.5f);
+    ImGui::TextUnformatted(text);
+}
+
+static void DrawLoginWindow()
+{
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const ImVec2 center = viewport->GetCenter();
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(420.0f, 260.0f), ImGuiCond_Always);
+
+    ImGui::Begin("Absent Loader", nullptr,
+        ImGuiWindowFlags_NoTitleBar |
+        ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoScrollbar);
+
+    ImGui::Dummy(ImVec2(0.0f, 4.0f));
+    {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.72f, 0.40f, 1.00f, 1.00f));
+        CenterText("ABSENT");
+        ImGui::PopStyleColor();
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.70f, 0.70f, 0.78f, 1.00f));
+        CenterText("LOADER");
+        ImGui::PopStyleColor();
+    }
+
+    ImGui::Dummy(ImVec2(0.0f, 6.0f));
+    ImGui::Separator();
+    ImGui::Dummy(ImVec2(0.0f, 8.0f));
+
+    ImGui::TextDisabled("License key");
+    ImGui::SetNextItemWidth(-1.0f);
+    const bool enter_pressed = ImGui::InputText(
+        "##license_key",
+        g_license_key,
+        IM_ARRAYSIZE(g_license_key),
+        ImGuiInputTextFlags_Password |
+        ImGuiInputTextFlags_EnterReturnsTrue);
+
+    ImGui::Dummy(ImVec2(0.0f, 4.0f));
+
+    const bool can_login = g_keyauth_ready && !g_login_busy && g_license_key[0] != '\0';
+    if (!can_login)
+        ImGui::BeginDisabled();
+
+    if (ImGui::Button(g_login_busy ? "Signing in..." : "Login", ImVec2(-1.0f, 36.0f)) || (enter_pressed && can_login))
+    {
+        g_login_busy = true;
+        g_status_error = false;
+        g_status_message = "Validating license...";
+
+        try
+        {
+            KeyAuthApp.license(g_license_key);
+            if (KeyAuthApp.response.success)
+            {
+                g_licensed = true;
+                g_status_error = false;
+                g_status_message = KeyAuthApp.response.message.empty()
+                    ? "License accepted"
+                    : KeyAuthApp.response.message;
+                // Clear key from memory after successful auth
+                SecureZeroMemory(g_license_key, sizeof(g_license_key));
+            }
+            else
+            {
+                g_status_error = true;
+                g_status_message = KeyAuthApp.response.message.empty()
+                    ? "License rejected"
+                    : KeyAuthApp.response.message;
+            }
+        }
+        catch (const std::exception& ex)
+        {
+            g_status_error = true;
+            g_status_message = ex.what();
+        }
+        g_login_busy = false;
+    }
+
+    if (!can_login)
+        ImGui::EndDisabled();
+
+    ImGui::Dummy(ImVec2(0.0f, 8.0f));
+    {
+        const ImVec4 status_col = g_status_error
+            ? ImVec4(0.95f, 0.35f, 0.40f, 1.00f)
+            : ImVec4(0.55f, 0.55f, 0.62f, 1.00f);
+        ImGui::PushStyleColor(ImGuiCol_Text, status_col);
+        ImGui::TextWrapped("%s", g_status_message.c_str());
+        ImGui::PopStyleColor();
+    }
+
+    ImGui::End();
+}
+
+static void DrawDashboardWindow()
+{
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const ImVec2 center = viewport->GetCenter();
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(420.0f, 220.0f), ImGuiCond_Always);
+
+    ImGui::Begin("Absent Loader##dashboard", nullptr,
+        ImGuiWindowFlags_NoTitleBar |
+        ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoScrollbar);
+
+    ImGui::Dummy(ImVec2(0.0f, 4.0f));
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.72f, 0.40f, 1.00f, 1.00f));
+    CenterText("ABSENT");
+    ImGui::PopStyleColor();
+    CenterText("Welcome back");
+
+    ImGui::Dummy(ImVec2(0.0f, 6.0f));
+    ImGui::Separator();
+    ImGui::Dummy(ImVec2(0.0f, 10.0f));
+
+    ImGui::TextDisabled("Status");
+    ImGui::TextWrapped("%s", g_status_message.c_str());
+
+    if (!KeyAuthApp.user_data.username.empty())
+    {
+        ImGui::Dummy(ImVec2(0.0f, 6.0f));
+        ImGui::TextDisabled("User");
+        ImGui::TextUnformatted(KeyAuthApp.user_data.username.c_str());
+    }
+
+    if (!KeyAuthApp.user_data.expires.empty())
+    {
+        ImGui::TextDisabled("Expiry");
+        ImGui::TextUnformatted(KeyAuthApp.user_data.expires.c_str());
+    }
+
+    ImGui::Dummy(ImVec2(0.0f, 12.0f));
+    if (ImGui::Button("Sign out", ImVec2(-1.0f, 32.0f)))
+    {
+        g_licensed = false;
+        g_status_error = false;
+        g_status_message = "Signed out. Enter a license key to continue.";
+        SecureZeroMemory(g_license_key, sizeof(g_license_key));
+    }
+
+    ImGui::End();
+}
 
 // Main code
 int main(int, char**)
 {
-    // Make process DPI aware and obtain main monitor scale
     ImGui_ImplWin32_EnableDpiAwareness();
     float main_scale = ImGui_ImplWin32_GetDpiScaleForMonitor(::MonitorFromPoint(POINT{ 0, 0 }, MONITOR_DEFAULTTOPRIMARY));
 
-    // Create application window
-    WNDCLASSEXW wc = { sizeof(wc), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(nullptr), nullptr, nullptr, nullptr, nullptr, L"ImGui Example", nullptr };
+    WNDCLASSEXW wc = { sizeof(wc), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(nullptr), nullptr, nullptr, nullptr, nullptr, L"Absent Loader", nullptr };
     ::RegisterClassExW(&wc);
-    HWND hwnd = ::CreateWindowW(wc.lpszClassName, L"Dear ImGui DirectX11 Example", WS_OVERLAPPEDWINDOW, 100, 100, (int)(1280 * main_scale), (int)(800 * main_scale), nullptr, nullptr, wc.hInstance, nullptr);
+    HWND hwnd = ::CreateWindowW(wc.lpszClassName, L"Absent Loader", WS_OVERLAPPEDWINDOW, 100, 100, (int)(900 * main_scale), (int)(600 * main_scale), nullptr, nullptr, wc.hInstance, nullptr);
 
-    // Initialize Direct3D
     if (!CreateDeviceD3D(hwnd))
     {
         CleanupDeviceD3D();
@@ -47,62 +307,61 @@ int main(int, char**)
         return 1;
     }
 
-    // Show the window
     ::ShowWindow(hwnd, SW_SHOWDEFAULT);
     ::UpdateWindow(hwnd);
 
-    // Setup Dear ImGui context
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO(); (void)io;
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+    io.IniFilename = nullptr; // don't persist layout next to the exe
 
-    // Setup Dear ImGui style
+    ApplyAbsentStyle();
     ImGuiStyle& style = ImGui::GetStyle();
-    ImGui::StyleColorsDark();
-    //ImGui::StyleColorsLight();
-    //style.FontSizeBase = 16.0f;           // Default to 13.0f when unspecified, which allows crisp legacy font for non-4K screens.
-    style.FrameRounding = 10.0f;
-    style.GrabRounding = 10.0f;
-    style.WindowRounding = 10.0f;
+    style.ScaleAllSizes(main_scale);
+    style.FontScaleDpi = main_scale;
 
-    // Setup scaling
-    style.ScaleAllSizes(main_scale);        // Bake a fixed style scale. (until we have a solution for dynamic style scaling, changing this requires resetting Style + calling this again)
-    style.FontScaleDpi = main_scale;        // Set initial font scale. (in docking branch: using io.ConfigDpiScaleFonts=true automatically overrides this for every window depending on the current monitor)
-
-    // Setup Platform/Renderer backends
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
 
-    // Load Fonts
-    // - If fonts are not explicitly loaded, Dear ImGui will select an embedded font: either AddFontDefaultVector() or AddFontDefaultBitmap().
-    //   This selection is based on (style.FontSizeBase * style.FontScaleMain * style.FontScaleDpi) reaching a threshold.
-    // - You can load multiple fonts and use ImGui::PushFont()/PopFont() to select them.
-    // - If a file cannot be loaded, AddFont functions will return a nullptr. Please handle those errors in your code (e.g. use an assertion, display an error and quit).
-    // - Read 'docs/FONTS.md' for more instructions and details.
-    // - Use '#define IMGUI_ENABLE_FREETYPE' in your imconfig file to use FreeType for higher quality font rendering.
-    // - Remember that in C/C++ if you want to include a backslash \ in a string literal you need to write a double backslash \\ !
-    //io.Fonts->AddFontDefaultVector();
-    //io.Fonts->AddFontDefaultBitmap();
-    //io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\segoeui.ttf");
-    //io.Fonts->AddFontFromFileTTF("../../misc/fonts/DroidSans.ttf");
-    //io.Fonts->AddFontFromFileTTF("../../misc/fonts/Roboto-Medium.ttf");
-    //io.Fonts->AddFontFromFileTTF("../../misc/fonts/Cousine-Regular.ttf");
-    //ImFont* font = io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\ArialUni.ttf");
-    //IM_ASSERT(font != nullptr);
+    // Prefer Segoe UI when present (already the common Windows UI font path in the stock example).
+    ImFont* segoe = io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\segoeui.ttf", 18.0f * main_scale);
+    if (segoe == nullptr)
+        io.Fonts->AddFontDefault();
 
-    // Our state
-    bool show_demo_window = true;
-    bool show_another_window = false;
-    ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
+    // Clear / backdrop color — slightly cooler than the stock demo gray
+    ImVec4 clear_color = ImVec4(0.05f, 0.05f, 0.07f, 1.00f);
 
-    // Main loop
+    // Initialize KeyAuth before the interactive login loop
+    try
+    {
+        KeyAuthApp.init();
+        if (KeyAuthApp.response.success)
+        {
+            g_keyauth_ready = true;
+            g_status_error = false;
+            g_status_message = "Enter your license key to continue.";
+        }
+        else
+        {
+            g_keyauth_ready = false;
+            g_status_error = true;
+            g_status_message = KeyAuthApp.response.message.empty()
+                ? "License service unavailable"
+                : KeyAuthApp.response.message;
+        }
+    }
+    catch (const std::exception& ex)
+    {
+        g_keyauth_ready = false;
+        g_status_error = true;
+        g_status_message = ex.what();
+    }
+
     bool done = false;
     while (!done)
     {
-        // Poll and handle messages (inputs, window resize, etc.)
-        // See the WndProc() function below for our to dispatch events to the Win32 backend.
         MSG msg;
         while (::PeekMessage(&msg, nullptr, 0U, 0U, PM_REMOVE))
         {
@@ -114,7 +373,6 @@ int main(int, char**)
         if (done)
             break;
 
-        // Handle window being minimized or screen locked
         if (g_SwapChainOccluded && g_pSwapChain->Present(0, DXGI_PRESENT_TEST) == DXGI_STATUS_OCCLUDED)
         {
             ::Sleep(10);
@@ -122,7 +380,6 @@ int main(int, char**)
         }
         g_SwapChainOccluded = false;
 
-        // Handle window resize (we don't resize directly in the WM_SIZE handler)
         if (g_ResizeWidth != 0 && g_ResizeHeight != 0)
         {
             CleanupRenderTarget();
@@ -131,62 +388,15 @@ int main(int, char**)
             CreateRenderTarget();
         }
 
-        // Start ImGui frame
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
-        // Set window size BEFORE Begin
-        ImGui::SetNextWindowSize(ImVec2(400, 175), ImGuiCond_Once);
+        if (g_licensed)
+            DrawDashboardWindow();
+        else
+            DrawLoginWindow();
 
-        ImGui::Begin("Abdsent Loader", nullptr,
-            ImGuiWindowFlags_NoTitleBar |
-            ImGuiWindowFlags_NoCollapse |
-            ImGuiWindowFlags_NoResize);
-
-        // Title
-        ImGui::SetCursorPosX(
-            ImGui::GetWindowSize().x / 2 -
-            ImGui::CalcTextSize("Absent loader").x / 2
-        );
-        ImGui::SetCursorPosY(20);
-        ImGui::Text("Absent loader");
-
-        // Password input
-        static char key[64] = "";
-
-        ImGui::SetCursorPosX(70);
-        ImGui::SetCursorPosY(50);
-        ImGui::InputText(
-            "##key",
-            key,
-            IM_ARRAYSIZE(key),
-            ImGuiInputTextFlags_Password
-        );
-
-        // Purple button
-        ImGui::PushStyleColor(ImGuiCol_Button,
-            ImVec4(0.65f, 0.20f, 1.00f, 1.00f));
-
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-            ImVec4(0.65f, 0.35f, 0.95f, 1.00f));
-
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-            ImVec4(0.45f, 0.15f, 0.75f, 1.00f));
-
-        ImGui::SetCursorPosX(70);
-        ImGui::SetCursorPosY(80);
-
-        if (ImGui::Button("Login", ImVec2(260, 30)))
-        {
-            // Login code here
-        }
-
-        ImGui::PopStyleColor(3);
-
-        ImGui::End();
-
-        // Render
         ImGui::Render();
 
         const float clear_color_with_alpha[4] = {
@@ -196,24 +406,14 @@ int main(int, char**)
             clear_color.w
         };
 
-        g_pd3dDeviceContext->OMSetRenderTargets(
-            1, &g_mainRenderTargetView, nullptr
-        );
-
-        g_pd3dDeviceContext->ClearRenderTargetView(
-            g_mainRenderTargetView, clear_color_with_alpha
-        );
-
+        g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, nullptr);
+        g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, clear_color_with_alpha);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
-
-        // Present
-        HRESULT hr = g_pSwapChain->Present(1, 0);   // Present with vsync
-        //HRESULT hr = g_pSwapChain->Present(0, 0); // Present without vsync
+        HRESULT hr = g_pSwapChain->Present(1, 0);
         g_SwapChainOccluded = (hr == DXGI_STATUS_OCCLUDED);
     }
 
-    // Cleanup
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
@@ -229,8 +429,6 @@ int main(int, char**)
 
 bool CreateDeviceD3D(HWND hWnd)
 {
-    // Setup swap chain
-    // This is a basic setup. Optimally could use e.g. DXGI_SWAP_EFFECT_FLIP_DISCARD and handle fullscreen mode differently. See #8979 for suggestions.
     DXGI_SWAP_CHAIN_DESC sd;
     ZeroMemory(&sd, sizeof(sd));
     sd.BufferCount = 2;
@@ -248,11 +446,10 @@ bool CreateDeviceD3D(HWND hWnd)
     sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
 
     UINT createDeviceFlags = 0;
-    //createDeviceFlags |= D3D11_CREATE_DEVICE_DEBUG;
     D3D_FEATURE_LEVEL featureLevel;
     const D3D_FEATURE_LEVEL featureLevelArray[2] = { D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_0, };
     HRESULT res = D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, createDeviceFlags, featureLevelArray, 2, D3D11_SDK_VERSION, &sd, &g_pSwapChain, &g_pd3dDevice, &featureLevel, &g_pd3dDeviceContext);
-    if (res == DXGI_ERROR_UNSUPPORTED) // Try high-performance WARP software driver if hardware is not available.
+    if (res == DXGI_ERROR_UNSUPPORTED)
         res = D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, createDeviceFlags, featureLevelArray, 2, D3D11_SDK_VERSION, &sd, &g_pSwapChain, &g_pd3dDevice, &featureLevel, &g_pd3dDeviceContext);
     if (res != S_OK)
         return false;
@@ -282,14 +479,8 @@ void CleanupRenderTarget()
     if (g_mainRenderTargetView) { g_mainRenderTargetView->Release(); g_mainRenderTargetView = nullptr; }
 }
 
-// Forward declare message handler from imgui_impl_win32.cpp
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
-// Win32 message handler
-// You can read the io.WantCaptureMouse, io.WantCaptureKeyboard flags to tell if dear imgui wants to use your inputs.
-// - When io.WantCaptureMouse is true, do not dispatch mouse input data to your main application, or clear/overwrite your copy of the mouse data.
-// - When io.WantCaptureKeyboard is true, do not dispatch keyboard input data to your main application, or clear/overwrite your copy of the keyboard data.
-// Generally you may always pass all inputs to dear imgui, and hide them from your application based on those two flags.
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam))
@@ -300,11 +491,11 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_SIZE:
         if (wParam == SIZE_MINIMIZED)
             return 0;
-        g_ResizeWidth = (UINT)LOWORD(lParam); // Queue resize
+        g_ResizeWidth = (UINT)LOWORD(lParam);
         g_ResizeHeight = (UINT)HIWORD(lParam);
         return 0;
     case WM_SYSCOMMAND:
-        if ((wParam & 0xfff0) == SC_KEYMENU) // Disable ALT application menu
+        if ((wParam & 0xfff0) == SC_KEYMENU)
             return 0;
         break;
     case WM_DESTROY:
